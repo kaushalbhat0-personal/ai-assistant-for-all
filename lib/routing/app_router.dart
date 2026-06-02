@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:screenfix_ai/features/debug/debug_screen.dart';
 import 'package:screenfix_ai/routing/route_paths.dart';
 
 class AppRouter {
@@ -16,6 +17,10 @@ class AppRouter {
           GoRoute(
             path: RoutePaths.settings,
             builder: (_, __) => const _SettingsPage(),
+          ),
+          GoRoute(
+            path: RoutePaths.debug,
+            builder: (_, __) => const DebugScreen(),
           ),
         ],
         errorBuilder: (_, __) => const _NotFoundPage(),

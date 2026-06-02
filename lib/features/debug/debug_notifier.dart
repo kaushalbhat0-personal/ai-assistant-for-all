@@ -1,0 +1,201 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import 'package:screenfix_ai/core/di/get_it.dart';
+import 'package:screenfix_ai/features/overlay/integration/overlay_service.dart';
+import 'package:screenfix_ai/features/screen_capture/domain/screen_capture_result.dart';
+import 'package:screenfix_ai/features/screen_capture/integration/screen_capture_service.dart';
+
+class DebugLogEntry {
+  final String message;
+  final String type;
+  final DateTime timestamp;
+
+  const DebugLogEntry({
+    required this.message,
+    required this.type,
+    required this.timestamp,
+  });
+}
+
+class DebugState {
+  final bool overlayPermissionGranted;
+  final bool capturePermissionGranted;
+  final ScreenCaptureResult? lastCapture;
+  final bool isOverlayChecking;
+  final bool isOverlayRequesting;
+  final bool isCaptureChecking;
+  final bool isCaptureRequesting;
+  final bool isCapturing;
+  final List<DebugLogEntry> logs;
+
+  const DebugState({
+    this.overlayPermissionGranted = false,
+    this.capturePermissionGranted = false,
+    this.lastCapture,
+    this.isOverlayChecking = false,
+    this.isOverlayRequesting = false,
+    this.isCaptureChecking = false,
+    this.isCaptureRequesting = false,
+    this.isCapturing = false,
+    this.logs = const [],
+  });
+
+  DebugState copyWith({
+    bool? overlayPermissionGranted,
+    bool? capturePermissionGranted,
+    ScreenCaptureResult? lastCapture,
+    bool? isOverlayChecking,
+    bool? isOverlayRequesting,
+    bool? isCaptureChecking,
+    bool? isCaptureRequesting,
+    bool? isCapturing,
+    List<DebugLogEntry>? logs,
+  }) {
+    return DebugState(
+      overlayPermissionGranted:
+          overlayPermissionGranted ?? this.overlayPermissionGranted,
+      capturePermissionGranted:
+          capturePermissionGranted ?? this.capturePermissionGranted,
+      lastCapture: lastCapture ?? this.lastCapture,
+      isOverlayChecking: isOverlayChecking ?? this.isOverlayChecking,
+      isOverlayRequesting: isOverlayRequesting ?? this.isOverlayRequesting,
+      isCaptureChecking: isCaptureChecking ?? this.isCaptureChecking,
+      isCaptureRequesting: isCaptureRequesting ?? this.isCaptureRequesting,
+      isCapturing: isCapturing ?? this.isCapturing,
+      logs: logs ?? this.logs,
+    );
+  }
+}
+
+final debugProvider = StateNotifierProvider<DebugNotifier, DebugState>(
+  (ref) => DebugNotifier(),
+);
+
+class DebugNotifier extends StateNotifier<DebugState> {
+  final OverlayService _overlayService;
+  final ScreenCaptureService _captureService;
+
+  DebugNotifier()
+      : _overlayService = getIt<OverlayService>(),
+        _captureService = getIt<ScreenCaptureService>(),
+        super(const DebugState());
+
+  void _addLog(String message, String type) {
+    state = state.copyWith(
+      logs: [
+        ...state.logs,
+        DebugLogEntry(
+          message: message,
+          type: type,
+          timestamp: DateTime.now(),
+        ),
+      ],
+    );
+  }
+
+  Future<void> checkOverlayPermission() async {
+    state = state.copyWith(isOverlayChecking: true);
+    try {
+      final granted = await _overlayService.checkOverlayPermission();
+      state = state.copyWith(
+        overlayPermissionGranted: granted,
+        isOverlayChecking: false,
+      );
+      _addLog(
+        granted ? 'Overlay permission: granted' : 'Overlay permission: denied',
+        granted ? 'success' : 'info',
+      );
+    } catch (e) {
+      state = state.copyWith(isOverlayChecking: false);
+      _addLog('Overlay check failed: $e', 'error');
+    }
+  }
+
+  Future<void> requestOverlayPermission() async {
+    state = state.copyWith(isOverlayRequesting: true);
+    try {
+      final granted = await _overlayService.requestOverlayPermission();
+      state = state.copyWith(
+        overlayPermissionGranted: granted,
+        isOverlayRequesting: false,
+      );
+      _addLog(
+        granted
+            ? 'Overlay permission: granted'
+            : 'Overlay permission: denied',
+        granted ? 'success' : 'info',
+      );
+    } catch (e) {
+      state = state.copyWith(isOverlayRequesting: false);
+      _addLog('Overlay request failed: $e', 'error');
+    }
+  }
+
+  Future<void> checkCapturePermission() async {
+    state = state.copyWith(isCaptureChecking: true);
+    try {
+      final status = await _captureService.hasPermission();
+      state = state.copyWith(
+        capturePermissionGranted: status.isGranted,
+        isCaptureChecking: false,
+      );
+      _addLog(
+        status.isGranted
+            ? 'Capture permission: granted'
+            : 'Capture permission: $status',
+        status.isGranted ? 'success' : 'info',
+      );
+    } catch (e) {
+      state = state.copyWith(isCaptureChecking: false);
+      _addLog('Capture check failed: $e', 'error');
+    }
+  }
+
+  Future<void> requestCapturePermission() async {
+    state = state.copyWith(isCaptureRequesting: true);
+    try {
+      final status = await _captureService.requestPermission();
+      state = state.copyWith(
+        capturePermissionGranted: status.isGranted,
+        isCaptureRequesting: false,
+      );
+      _addLog(
+        status.isGranted
+            ? 'Capture permission: granted'
+            : 'Capture permission: $status',
+        status.isGranted ? 'success' : 'info',
+      );
+    } catch (e) {
+      state = state.copyWith(isCaptureRequesting: false);
+      _addLog('Capture request failed: $e', 'error');
+    }
+  }
+
+  Future<void> captureScreen() async {
+    state = state.copyWith(isCapturing: true);
+    try {
+      final result = await _captureService.captureScreen();
+      if (result != null) {
+        state = state.copyWith(
+          lastCapture: result,
+          isCapturing: false,
+        );
+        _addLog(
+          'Screen captured: ${result.width}x${result.height} '
+              '(${result.bytes.length} bytes)',
+          'success',
+        );
+      } else {
+        state = state.copyWith(isCapturing: false);
+        _addLog('Screen capture returned null', 'error');
+      }
+    } catch (e) {
+      state = state.copyWith(isCapturing: false);
+      _addLog('Screen capture failed: $e', 'error');
+    }
+  }
+
+  void clearLogs() {
+    state = state.copyWith(logs: []);
+  }
+}
