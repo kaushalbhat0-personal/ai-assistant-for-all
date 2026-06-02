@@ -74,11 +74,11 @@ class ScreenCapturePlatformChannel {
       return null;
     } on PlatformException catch (e) {
       _logger.error(
-        'captureScreen: platform error',
+        'captureScreen: platform error: ${e.code}: ${e.message}',
         tag: 'ScreenCaptureChannel',
         error: e,
       );
-      return null;
+      rethrow;
     }
   }
 }
