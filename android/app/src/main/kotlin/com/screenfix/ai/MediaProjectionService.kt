@@ -24,8 +24,14 @@ class MediaProjectionService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "onStartCommand")
         val notification = buildNotification()
-        startForeground(NOTIFICATION_ID, notification)
-        Log.d(TAG, "startForeground called")
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+            Log.d(TAG, "startForeground called with FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION")
+        } else {
+            @Suppress("DEPRECATION")
+            startForeground(NOTIFICATION_ID, notification)
+            Log.d(TAG, "startForeground called (legacy)")
+        }
         signalReady()
         Log.d(TAG, "service ready")
         return START_NOT_STICKY

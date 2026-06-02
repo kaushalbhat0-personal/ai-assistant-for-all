@@ -57,6 +57,50 @@ class ScreenCapturePlatformChannel {
     }
   }
 
+  Future<bool> startProjectionSession() async {
+    try {
+      final result =
+          await _captureChannel.invokeMethod<bool>('startProjectionSession');
+      return result ?? false;
+    } on MissingPluginException catch (e) {
+      _logger.error(
+        'startProjectionSession: plugin not available',
+        tag: 'ScreenCaptureChannel',
+        error: e,
+      );
+      return false;
+    } on PlatformException catch (e) {
+      _logger.error(
+        'startProjectionSession: platform error: ${e.code}: ${e.message}',
+        tag: 'ScreenCaptureChannel',
+        error: e,
+      );
+      return false;
+    }
+  }
+
+  Future<bool> stopProjectionSession() async {
+    try {
+      final result =
+          await _captureChannel.invokeMethod<bool>('stopProjectionSession');
+      return result ?? false;
+    } on MissingPluginException catch (e) {
+      _logger.error(
+        'stopProjectionSession: plugin not available',
+        tag: 'ScreenCaptureChannel',
+        error: e,
+      );
+      return false;
+    } on PlatformException catch (e) {
+      _logger.error(
+        'stopProjectionSession: platform error: ${e.code}: ${e.message}',
+        tag: 'ScreenCaptureChannel',
+        error: e,
+      );
+      return false;
+    }
+  }
+
   Future<Map<String, dynamic>?> captureScreen() async {
     try {
       final result =

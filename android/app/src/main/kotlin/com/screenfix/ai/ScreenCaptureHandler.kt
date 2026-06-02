@@ -7,6 +7,7 @@ import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.media.ImageReader
+import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Handler
@@ -26,121 +27,113 @@ class ScreenCaptureHandler(private val activity: Activity) {
     private val listenerThread = HandlerThread("ImageListener").apply { start() }
     private val listenerHandler = Handler(listenerThread.looper)
 
+    private var mediaProjection: MediaProjection? = null
+    private var projectionCallback: MediaProjection.Callback? = null
+    private var serviceIntent: Intent? = null
+    private var currentVirtualDisplay: android.hardware.display.VirtualDisplay? = null
+    private var sessionActive = false
+
     fun register(flutterEngine: FlutterEngine) {
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             CHANNEL_NAME
         ).setMethodCallHandler { call, result ->
             when (call.method) {
+                METHOD_START_SESSION -> startProjectionSession(result)
                 METHOD_CAPTURE -> captureScreen(result)
+                METHOD_STOP_SESSION -> stopProjectionSession(result)
                 else -> result.notImplemented()
             }
         }
     }
 
-    private fun captureScreen(result: MethodChannel.Result) {
-        Log.d(TAG, "captureScreen: start")
-        val resultCode = MediaProjectionPermissionHandler.lastResultCode
-        val intentData = MediaProjectionPermissionHandler.lastIntentData
-        Log.d(TAG, "captureScreen: resultCode=$resultCode intentData=${if (intentData != null) "non-null" else "NULL"}")
-
-        // Clear static fields so they cannot be reused on subsequent captures
-        MediaProjectionPermissionHandler.lastResultCode = Activity.RESULT_CANCELED
-        MediaProjectionPermissionHandler.lastIntentData = null
-
-        if (intentData == null || resultCode != Activity.RESULT_OK) {
-            Log.d(TAG, "captureScreen: permission check -> NULL")
-            result.error(
-                "PERMISSION_DENIED",
-                "MediaProjection permission not granted",
-                null
-            )
+    private fun startProjectionSession(result: MethodChannel.Result) {
+        if (sessionActive) {
+            result.success(true)
             return
         }
-        Log.d(TAG, "captureScreen: permission check -> SUCCESS")
+        val resultCode = MediaProjectionPermissionHandler.lastResultCode
+        val intentData = MediaProjectionPermissionHandler.lastIntentData ?: run {
+            result.error("PERMISSION_DENIED", "MediaProjection permission not granted", null)
+            return
+        }
+        if (resultCode != Activity.RESULT_OK) {
+            result.error("PERMISSION_DENIED", "MediaProjection permission not granted", null)
+            return
+        }
 
-        // Start foreground service (required for Android 14+ MediaProjection)
-        Log.d(TAG, "captureScreen: starting foreground service")
         MediaProjectionService.reset()
-        val serviceIntent = Intent(activity, MediaProjectionService::class.java)
-        ContextCompat.startForegroundService(activity, serviceIntent)
+        val intent = Intent(activity, MediaProjectionService::class.java)
+        serviceIntent = intent
+        ContextCompat.startForegroundService(activity, intent)
 
-        // Move capture to background thread (awaitReady blocks)
         backgroundHandler.post {
-            var mediaProjection: android.media.projection.MediaProjection? = null
-            var imageReader: ImageReader? = null
-            var virtualDisplay: android.hardware.display.VirtualDisplay? = null
-            var projectionCallback: android.media.projection.MediaProjection.Callback? = null
-            var captureResult: Map<String, Any>? = null
-            var errorCode: String? = null
-            var errorMessage: String? = null
             try {
-                Log.d(TAG, "captureScreen: awaiting foreground service ready")
                 if (!MediaProjectionService.awaitReady(5000)) {
-                    Log.d(TAG, "captureScreen: foreground service timeout")
-                    errorCode = "SERVICE_FAILED"
-                    errorMessage = "Foreground service did not start in time"
+                    postResult(result) { it.error("SERVICE_FAILED", "Foreground service did not start in time", null) }
                     return@post
                 }
-                Log.d(TAG, "captureScreen: foreground service ready")
 
-                val manager =
-                    activity.getSystemService(Context.MEDIA_PROJECTION_SERVICE)
-                            as MediaProjectionManager
+                val manager = activity.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                 mediaProjection = manager.getMediaProjection(resultCode, intentData)
-                Log.d(TAG, "projection_created -> ${if (mediaProjection != null) "SUCCESS" else "NULL"}")
-
                 if (mediaProjection == null) {
-                    errorCode = "PROJECTION_FAILED"
-                    errorMessage = "Failed to create media projection"
+                    postResult(result) { it.error("PROJECTION_FAILED", "Failed to create media projection", null) }
                     return@post
                 }
 
-                Log.d(TAG, "captureScreen: registering MediaProjection.Callback")
-                projectionCallback = object : android.media.projection.MediaProjection.Callback() {
-                    override fun onStop() {
-                        Log.d(TAG, "MediaProjection.Callback.onStop invoked isRunning=${mediaProjection != null}")
-                    }
+                projectionCallback = object : MediaProjection.Callback() {
                     @Suppress("OVERRIDE_DEPRECATION")
-                    override fun onCapturedContentResize(width: Int, height: Int) {
-                        Log.d(TAG, "captureScreen: MediaProjection.Callback.onCapturedContentResize width=$width height=$height")
-                    }
+                    override fun onCapturedContentResize(width: Int, height: Int) {}
                     @Suppress("OVERRIDE_DEPRECATION")
-                    override fun onCapturedContentVisibilityChanged(isVisible: Boolean) {
-                        Log.d(TAG, "captureScreen: MediaProjection.Callback.onCapturedContentVisibilityChanged visible=$isVisible")
-                    }
+                    override fun onCapturedContentVisibilityChanged(isVisible: Boolean) {}
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    mediaProjection.registerCallback(projectionCallback, backgroundHandler)
+                    mediaProjection!!.registerCallback(projectionCallback!!, backgroundHandler)
                 }
 
                 val metrics = activity.resources.displayMetrics
+                currentVirtualDisplay = mediaProjection!!.createVirtualDisplay(
+                    "ScreenFixCapture",
+                    metrics.widthPixels, metrics.heightPixels, metrics.densityDpi,
+                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                    null, null, null
+                )
+
+                MediaProjectionPermissionHandler.lastResultCode = Activity.RESULT_CANCELED
+                MediaProjectionPermissionHandler.lastIntentData = null
+
+                sessionActive = true
+                Log.d(TAG, "projection_session_created")
+                postResult(result) { it.success(true) }
+            } catch (e: Exception) {
+                Log.e(TAG, "startProjectionSession: ${e.message}")
+                postResult(result) { it.error("SESSION_FAILED", e.message, null) }
+            }
+        }
+    }
+
+    private fun captureScreen(result: MethodChannel.Result) {
+        if (!sessionActive || mediaProjection == null) {
+            result.error("SESSION_NOT_ACTIVE", "Call startProjectionSession first", null)
+            return
+        }
+
+        backgroundHandler.post {
+            var imageReader: ImageReader? = null
+            var captureResultData: Map<String, Any>? = null
+            var errorMsg: String? = null
+            val captureSyncLatch = CountDownLatch(1)
+
+            try {
+                val metrics = activity.resources.displayMetrics
                 val width = metrics.widthPixels
                 val height = metrics.heightPixels
-                val density = metrics.densityDpi
-                Log.d(TAG, "capture_width=$width")
-                Log.d(TAG, "capture_height=$height")
-                Log.d(TAG, "capture_density=$density")
 
-                imageReader = ImageReader.newInstance(
-                    width, height, PixelFormat.RGBA_8888, 2
-                )
-                Log.d(TAG, "image_reader_created width=$width height=$height format=RGBA_8888")
-
-                // Use a separate handler to avoid deadlock:
-                // backgroundHandler blocks on latch.await() 
-                // listenerHandler is free to dispatch ImageReader callbacks
-                val captureSyncLatch = CountDownLatch(1)
-                var internalCaptureResult: Map<String, Any>? = null
-                var internalCaptureError: String? = null
+                imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
 
                 imageReader.setOnImageAvailableListener({ reader ->
                     try {
                         val image = reader.acquireLatestImage()
-                        val got = if (image != null) "SUCCESS" else "NULL"
-                        Log.d(TAG, "first_frame_received=$got")
-                        Log.d(TAG, "image_acquired -> $got")
-
                         if (image != null) {
                             try {
                                 val pngBytes = imageToPngBytes(image, width, height)
@@ -148,126 +141,103 @@ class ScreenCaptureHandler(private val activity: Activity) {
                                 map["width"] = width
                                 map["height"] = height
                                 map["bytes"] = pngBytes
-                                Log.d(TAG, "captureScreen: SUCCESS width=$width height=$height bytes=${pngBytes.size}")
-                                internalCaptureResult = map
+                                captureResultData = map
                             } catch (e: Exception) {
-                                Log.d(TAG, "captureScreen: imageToPngBytes exception: ${e.message}")
-                                internalCaptureError = e.message
+                                errorMsg = e.message
                             } finally {
                                 image.close()
                             }
                         } else {
-                            Log.d(TAG, "captureScreen: acquireLatestImage -> NULL")
-                            internalCaptureError = "No image available from reader"
+                            errorMsg = "No image available from reader"
                         }
                     } finally {
+                        try {
+                            reader.close()
+                        } catch (_: Exception) {}
                         captureSyncLatch.countDown()
                     }
                 }, listenerHandler)
-                Log.d(TAG, "listener_registered")
 
-                virtualDisplay = mediaProjection.createVirtualDisplay(
-                    "ScreenFixCapture",
-                    width, height, density,
-                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                    imageReader.surface, null, null
-                )
-                Log.d(TAG, "virtual_display_created -> ${if (virtualDisplay != null) "SUCCESS" else "NULL"}")
-
-                if (virtualDisplay == null) {
-                    Log.d(TAG, "captureScreen: virtual display is NULL")
-                    errorCode = "DISPLAY_FAILED"
-                    errorMessage = "Failed to create virtual display"
-                    return@post
-                }
-
-                val latchReached = captureSyncLatch.await(5, TimeUnit.SECONDS)
-                if (!latchReached) {
-                    Log.d(TAG, "captureScreen: captureSyncLatch timed out after 5s")
-                    internalCaptureError = "Image acquisition timed out after 5 seconds"
-                }
-
-                captureResult = internalCaptureResult
-                if (captureResult != null) {
-                    Log.d(TAG, "capture_success")
+                if (currentVirtualDisplay == null) {
+                    errorMsg = "VirtualDisplay not created at session start"
                 } else {
-                    errorCode = "CAPTURE_FAILED"
-                    errorMessage = internalCaptureError ?: "Unknown capture error"
-                }
-            } catch (e: SecurityException) {
-                Log.d(TAG, "captureScreen: SecurityException: ${e.message}")
-                errorCode = "SECURITY_EXCEPTION"
-                errorMessage = e.message
-            } catch (e: Exception) {
-                Log.d(TAG, "captureScreen: exception: ${e.message}")
-                errorCode = "CAPTURE_FAILED"
-                errorMessage = e.message
-            } finally {
-                // Post result + cleanup to main thread (required by Flutter and Android framework APIs)
-                val finalCode = errorCode
-                val finalMessage = errorMessage
-                Handler(activity.mainLooper).post {
-                    try {
-                        if (captureResult != null) {
-                            result.success(captureResult)
-                        } else {
-                            result.error(finalCode ?: "UNKNOWN", finalMessage ?: "Unknown error", null)
-                        }
-                    } finally {
-                        Log.d(TAG, "projection_cleanup: start")
-                        try {
-                            projectionCallback?.let { cb ->
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                    mediaProjection?.unregisterCallback(cb)
-                                }
-                            }
-                        } catch (e: Exception) {
-                            Log.d(TAG, "projection_cleanup: unregisterCallback exception: ${e.message}")
-                        }
-                        try {
-                            virtualDisplay?.release()
-                        } catch (e: Exception) {
-                            Log.d(TAG, "projection_cleanup: virtualDisplay.release exception: ${e.message}")
-                        }
-                        Log.d(TAG, "captureScreen: virtualDisplay released")
-                        try {
-                            imageReader?.close()
-                        } catch (e: Exception) {
-                            Log.d(TAG, "projection_cleanup: imageReader.close exception: ${e.message}")
-                        }
-                        Log.d(TAG, "captureScreen: imageReader closed")
-                        Log.d(TAG, "before_projection_stop")
-                        try {
-                            mediaProjection?.stop()
-                        } catch (e: Exception) {
-                            Log.d(TAG, "projection_cleanup: mediaProjection.stop exception: ${e.message}")
-                        }
-                        Log.d(TAG, "after_projection_stop")
-                        Log.d(TAG, "before_service_stop")
-                        try {
-                            activity.stopService(serviceIntent)
-                        } catch (e: Exception) {
-                            Log.d(TAG, "service_stop: exception: ${e.message}")
-                        }
-                        Log.d(TAG, "after_service_stop")
-                        Log.d(TAG, "captureScreen: cleanup complete")
+                    currentVirtualDisplay!!.setSurface(imageReader.surface)
+                    val latchReached = captureSyncLatch.await(5, TimeUnit.SECONDS)
+                    if (!latchReached) {
+                        errorMsg = "Image acquisition timed out after 5 seconds"
                     }
                 }
+
+                val finalResult = captureResultData
+                val finalError = errorMsg
+                postResult(result) {
+                    if (finalResult != null) {
+                        it.success(finalResult)
+                    } else {
+                        it.error("CAPTURE_FAILED", finalError ?: "Unknown error", null)
+                    }
+                }
+            } catch (e: SecurityException) {
+                val msg = e.message ?: ""
+                Log.e(TAG, "captureScreen: SecurityException: $msg")
+                if (msg.contains("re-use the resultData") || msg.contains("Reusing token")) {
+                    Log.d(TAG, "TOKEN_EXPIRED: MediaProjection token reuse rejected")
+                    MediaProjectionPermissionHandler.lastResultCode = Activity.RESULT_CANCELED
+                    MediaProjectionPermissionHandler.lastIntentData = null
+                    sessionActive = false
+                    postResult(result) { it.error("TOKEN_EXPIRED", msg, null) }
+                } else {
+                    postResult(result) { it.error("SECURITY_EXCEPTION", msg, null) }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "captureScreen: ${e.message}")
+                postResult(result) { it.error("CAPTURE_FAILED", e.message, null) }
+            } finally {
+                try {
+                    imageReader?.close()
+                } catch (_: Exception) {}
             }
         }
     }
 
-    private fun imageToPngBytes(
-        image: android.media.Image,
-        width: Int,
-        height: Int
-    ): ByteArray {
+    private fun stopProjectionSession(result: MethodChannel.Result) {
+        backgroundHandler.post {
+            try {
+                currentVirtualDisplay?.release()
+            } catch (_: Exception) {}
+            currentVirtualDisplay = null
+            try {
+                projectionCallback?.let { cb ->
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        mediaProjection?.unregisterCallback(cb)
+                    }
+                }
+            } catch (_: Exception) {}
+            try {
+                mediaProjection?.stop()
+                Log.d(TAG, "projection_session_stopped")
+            } catch (_: Exception) {}
+            try {
+                serviceIntent?.let { activity.stopService(it) }
+            } catch (_: Exception) {}
+            mediaProjection = null
+            projectionCallback = null
+            serviceIntent = null
+            currentVirtualDisplay = null
+            sessionActive = false
+            postResult(result) { it.success(true) }
+        }
+    }
+
+    private fun postResult(result: MethodChannel.Result, block: (MethodChannel.Result) -> Unit) {
+        Handler(activity.mainLooper).post { block(result) }
+    }
+
+    private fun imageToPngBytes(image: android.media.Image, width: Int, height: Int): ByteArray {
         val buffer = image.planes[0].buffer
         buffer.rewind()
-
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         bitmap.copyPixelsFromBuffer(buffer)
-
         val stream = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
         bitmap.recycle()
@@ -275,13 +245,20 @@ class ScreenCaptureHandler(private val activity: Activity) {
     }
 
     fun dispose() {
+        if (sessionActive) {
+            try { currentVirtualDisplay?.release() } catch (_: Exception) {}
+            try { mediaProjection?.stop() } catch (_: Exception) {}
+            try { serviceIntent?.let { activity.stopService(it) } } catch (_: Exception) {}
+        }
         listenerThread.quitSafely()
         backgroundThread.quitSafely()
     }
 
     companion object {
         private const val CHANNEL_NAME = "screenfix_ai/screen_capture"
+        private const val METHOD_START_SESSION = "startProjectionSession"
         private const val METHOD_CAPTURE = "captureScreen"
+        private const val METHOD_STOP_SESSION = "stopProjectionSession"
         private const val TAG = "ScreenFixCapture"
     }
 }

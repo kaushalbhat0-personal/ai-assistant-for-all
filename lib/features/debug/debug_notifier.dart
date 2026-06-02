@@ -19,48 +19,59 @@ class DebugLogEntry {
 
 class DebugState {
   final bool overlayPermissionGranted;
-  final bool capturePermissionGranted;
+  final bool permissionAvailable;
+  final bool sessionActive;
   final ScreenCaptureResult? lastCapture;
   final bool isOverlayChecking;
   final bool isOverlayRequesting;
   final bool isCaptureChecking;
   final bool isCaptureRequesting;
+  final bool isSessionStarting;
+  final bool isSessionStopping;
   final bool isCapturing;
   final List<DebugLogEntry> logs;
 
   const DebugState({
     this.overlayPermissionGranted = false,
-    this.capturePermissionGranted = false,
+    this.permissionAvailable = false,
+    this.sessionActive = false,
     this.lastCapture,
     this.isOverlayChecking = false,
     this.isOverlayRequesting = false,
     this.isCaptureChecking = false,
     this.isCaptureRequesting = false,
+    this.isSessionStarting = false,
+    this.isSessionStopping = false,
     this.isCapturing = false,
     this.logs = const [],
   });
 
   DebugState copyWith({
     bool? overlayPermissionGranted,
-    bool? capturePermissionGranted,
+    bool? permissionAvailable,
+    bool? sessionActive,
     ScreenCaptureResult? lastCapture,
     bool? isOverlayChecking,
     bool? isOverlayRequesting,
     bool? isCaptureChecking,
     bool? isCaptureRequesting,
+    bool? isSessionStarting,
+    bool? isSessionStopping,
     bool? isCapturing,
     List<DebugLogEntry>? logs,
   }) {
     return DebugState(
       overlayPermissionGranted:
           overlayPermissionGranted ?? this.overlayPermissionGranted,
-      capturePermissionGranted:
-          capturePermissionGranted ?? this.capturePermissionGranted,
+      permissionAvailable: permissionAvailable ?? this.permissionAvailable,
+      sessionActive: sessionActive ?? this.sessionActive,
       lastCapture: lastCapture ?? this.lastCapture,
       isOverlayChecking: isOverlayChecking ?? this.isOverlayChecking,
       isOverlayRequesting: isOverlayRequesting ?? this.isOverlayRequesting,
       isCaptureChecking: isCaptureChecking ?? this.isCaptureChecking,
       isCaptureRequesting: isCaptureRequesting ?? this.isCaptureRequesting,
+      isSessionStarting: isSessionStarting ?? this.isSessionStarting,
+      isSessionStopping: isSessionStopping ?? this.isSessionStopping,
       isCapturing: isCapturing ?? this.isCapturing,
       logs: logs ?? this.logs,
     );
@@ -136,18 +147,18 @@ class DebugNotifier extends StateNotifier<DebugState> {
     try {
       final status = await _captureService.hasPermission();
       state = state.copyWith(
-        capturePermissionGranted: status.isGranted,
+        permissionAvailable: status.isGranted,
         isCaptureChecking: false,
       );
       _addLog(
         status.isGranted
-            ? 'Capture permission: granted'
-            : 'Capture permission: $status',
+            ? 'Permission token: available'
+            : 'Permission token: not available',
         status.isGranted ? 'success' : 'info',
       );
     } catch (e) {
       state = state.copyWith(isCaptureChecking: false);
-      _addLog('Capture check failed: $e', 'error');
+      _addLog('Permission check failed: $e', 'error');
     }
   }
 
@@ -156,18 +167,58 @@ class DebugNotifier extends StateNotifier<DebugState> {
     try {
       final status = await _captureService.requestPermission();
       state = state.copyWith(
-        capturePermissionGranted: status.isGranted,
+        permissionAvailable: status.isGranted,
         isCaptureRequesting: false,
       );
       _addLog(
         status.isGranted
-            ? 'Capture permission: granted'
-            : 'Capture permission: $status',
+            ? 'Permission token: granted'
+            : 'Permission token: $status',
         status.isGranted ? 'success' : 'info',
       );
+      if (status.isGranted) {
+        await startSession();
+      }
     } catch (e) {
       state = state.copyWith(isCaptureRequesting: false);
-      _addLog('Capture request failed: $e', 'error');
+      _addLog('Permission request failed: $e', 'error');
+    }
+  }
+
+  Future<void> startSession() async {
+    state = state.copyWith(isSessionStarting: true);
+    try {
+      final ok = await _captureService.startSession();
+      state = state.copyWith(
+        sessionActive: ok,
+        permissionAvailable: ok ? false : state.permissionAvailable,
+        isSessionStarting: false,
+      );
+      _addLog(
+        ok ? 'projectionSessionStarted' : 'Projection session: failed to start',
+        ok ? 'success' : 'error',
+      );
+    } catch (e) {
+      state = state.copyWith(isSessionStarting: false);
+      _addLog('Start session failed: $e', 'error');
+    }
+  }
+
+  Future<void> stopSession() async {
+    state = state.copyWith(isSessionStopping: true);
+    try {
+      final ok = await _captureService.stopSession();
+      state = state.copyWith(
+        sessionActive: !ok,
+        isSessionStopping: false,
+      );
+      _addLog(
+        ok ? 'projectionSessionStopped' : 'Projection session: failed to stop',
+        ok ? 'success' : 'error',
+      );
+    } catch (e) {
+      state = state.copyWith(isSessionStopping: false);
+      _addLog('Stop session failed: $e', 'error');
     }
   }
 

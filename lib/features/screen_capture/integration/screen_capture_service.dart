@@ -10,6 +10,8 @@ import 'package:screenfix_ai/features/screen_capture/integration/screen_capture_
 abstract class ScreenCaptureService {
   Future<ScreenCapturePermissionStatus> hasPermission();
   Future<ScreenCapturePermissionStatus> requestPermission();
+  Future<bool> startSession();
+  Future<bool> stopSession();
   Future<ScreenCaptureResult?> captureScreen();
 }
 
@@ -31,6 +33,30 @@ class AndroidScreenCaptureService implements ScreenCaptureService {
   @override
   Future<ScreenCapturePermissionStatus> requestPermission() async =>
       _permissionHandler.request();
+
+  @override
+  Future<bool> startSession() async {
+    final result = await _channel.startProjectionSession();
+    if (result) {
+      _telemetry.track(TelemetryEvent(
+        type: TelemetryEventType.projectionSessionStarted,
+        properties: const {},
+      ));
+    }
+    return result;
+  }
+
+  @override
+  Future<bool> stopSession() async {
+    final result = await _channel.stopProjectionSession();
+    if (result) {
+      _telemetry.track(TelemetryEvent(
+        type: TelemetryEventType.projectionSessionStopped,
+        properties: const {},
+      ));
+    }
+    return result;
+  }
 
   @override
   Future<ScreenCaptureResult?> captureScreen() async {

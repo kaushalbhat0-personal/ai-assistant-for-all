@@ -67,18 +67,18 @@ class DebugScreen extends ConsumerWidget {
               title: 'Screen Capture Permission',
               children: [
                 _StatusRow(
-                  label: 'Status',
-                  value: state.capturePermissionGranted
-                      ? 'Granted'
-                      : 'Not Granted',
-                  isSuccess: state.capturePermissionGranted,
+                  label: 'Token',
+                  value: state.permissionAvailable
+                      ? 'Available'
+                      : 'Not Available',
+                  isSuccess: state.permissionAvailable,
                 ),
                 const SizedBox(height: 8),
                 Row(
                   children: [
                     Expanded(
                       child: _ActionButton(
-                        label: 'Check Permission',
+                        label: 'Check Token',
                         isLoading: state.isCaptureChecking,
                         onPressed: () => unawaited(notifier.checkCapturePermission()),
                       ),
@@ -88,9 +88,43 @@ class DebugScreen extends ConsumerWidget {
                       child: _ActionButton(
                         label: 'Request Permission',
                         isLoading: state.isCaptureRequesting,
-                        onPressed: () => unawaited(notifier.requestCapturePermission()),
+                        onPressed: state.sessionActive
+                            ? null
+                            : () => unawaited(notifier.requestCapturePermission()),
                       ),
                     ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            _SectionCard(
+              title: 'Projection Session',
+              children: [
+                _StatusRow(
+                  label: 'Status',
+                  value: state.sessionActive ? 'Active' : 'Inactive',
+                  isSuccess: state.sessionActive,
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    if (state.sessionActive)
+                      Expanded(
+                        child: _ActionButton(
+                          label: 'Stop Session',
+                          isLoading: state.isSessionStopping,
+                          onPressed: () => unawaited(notifier.stopSession()),
+                        ),
+                      ),
+                    if (!state.sessionActive && state.permissionAvailable)
+                      Expanded(
+                        child: _ActionButton(
+                          label: 'Start Session',
+                          isLoading: state.isSessionStarting,
+                          onPressed: () => unawaited(notifier.startSession()),
+                        ),
+                      ),
                   ],
                 ),
               ],
@@ -102,7 +136,9 @@ class DebugScreen extends ConsumerWidget {
                 _ActionButton(
                   label: 'Capture Screen',
                   isLoading: state.isCapturing,
-                  onPressed: () => unawaited(notifier.captureScreen()),
+                  onPressed: state.sessionActive
+                      ? () => unawaited(notifier.captureScreen())
+                      : null,
                 ),
                 if (state.lastCapture != null) ...[
                   const SizedBox(height: 12),
@@ -253,18 +289,18 @@ class _StatusRow extends StatelessWidget {
 class _ActionButton extends StatelessWidget {
   final String label;
   final bool isLoading;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
 
   const _ActionButton({
     required this.label,
     required this.isLoading,
-    required this.onPressed,
+    this.onPressed,
   });
 
   @override
   Widget build(BuildContext context) {
     return ElevatedButton(
-      onPressed: isLoading ? null : onPressed,
+      onPressed: (isLoading || onPressed == null) ? null : onPressed,
       child: isLoading
           ? const SizedBox(
               width: 20,

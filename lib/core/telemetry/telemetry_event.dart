@@ -10,6 +10,8 @@ enum TelemetryEventType {
   screenCaptureStarted,
   screenCaptureCompleted,
   screenCaptureFailed,
+  projectionSessionStarted,
+  projectionSessionStopped,
 }
 
 class TelemetryEvent {
