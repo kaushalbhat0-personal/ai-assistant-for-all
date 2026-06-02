@@ -1,0 +1,37 @@
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    # Naming
+    - camel_case_types: true
+    - constant_identifier_names: true
+    - non_constant_identifier_names: true
+    - file_names: true
+
+    # Code quality
+    - always_declare_return_types: true
+    - avoid_print: true
+    - avoid_redundant_argument_values: true
+    - avoid_unused_constructor_parameters: true
+    - avoid_void_async: true
+    - prefer_const_constructors: true
+    - prefer_const_declarations: true
+    - prefer_final_locals: true
+    - prefer_single_quotes: true
+    - require_trailing_commas: true
+    - sort_constructors_first: true
+    - type_annotate_public_apis: true
+    - unawaited_futures: true
+    - directives_ordering: true
+
+analyzer:
+  errors:
+    missing_return: error
+    missing_required_param: error
+    invalid_assignment: error
+    unused_import: warning
+
+  exclude:
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+    - build/**

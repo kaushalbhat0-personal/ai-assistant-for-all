@@ -1,0 +1,53 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.buildlog/
+.history
+.svn/
+.metadata/
+*.iml
+*.lock
+
+# IntelliJ
+*.iml
+.idea/
+
+# VSCode
+.vscode/
+*.code-workspace
+
+# Flutter/Dart
+.dart_tool/
+.packages
+.pub/
+build/
+*.dart.js
+*.info.json
+*.js_
+*.js.deps
+*.js.map
+
+# Android
+android/.gradle/
+android/app/build/
+android/build/
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# iOS
+ios/.symlinks/
+ios/Pods/
+ios/Runner.xcodeproj/xcuserdata/
+
+# Coverage
+coverage/
+
+# Environment
+.env
+.env.*
