@@ -71,11 +71,15 @@ class ScreenCaptureHandler(private val activity: Activity) {
             var imageReader: ImageReader? = null
             var virtualDisplay: android.hardware.display.VirtualDisplay? = null
             var projectionCallback: android.media.projection.MediaProjection.Callback? = null
+            var captureResult: Map<String, Any>? = null
+            var errorCode: String? = null
+            var errorMessage: String? = null
             try {
                 Log.d(TAG, "captureScreen: awaiting foreground service ready")
                 if (!MediaProjectionService.awaitReady(5000)) {
                     Log.d(TAG, "captureScreen: foreground service timeout")
-                    result.error("SERVICE_FAILED", "Foreground service did not start in time", null)
+                    errorCode = "SERVICE_FAILED"
+                    errorMessage = "Foreground service did not start in time"
                     return@post
                 }
                 Log.d(TAG, "captureScreen: foreground service ready")
@@ -87,14 +91,15 @@ class ScreenCaptureHandler(private val activity: Activity) {
                 Log.d(TAG, "projection_created -> ${if (mediaProjection != null) "SUCCESS" else "NULL"}")
 
                 if (mediaProjection == null) {
-                    result.error("PROJECTION_FAILED", "Failed to create media projection", null)
+                    errorCode = "PROJECTION_FAILED"
+                    errorMessage = "Failed to create media projection"
                     return@post
                 }
 
                 Log.d(TAG, "captureScreen: registering MediaProjection.Callback")
                 projectionCallback = object : android.media.projection.MediaProjection.Callback() {
                     override fun onStop() {
-                        Log.d(TAG, "projection_stopped")
+                        Log.d(TAG, "MediaProjection.Callback.onStop invoked isRunning=${mediaProjection != null}")
                     }
                     @Suppress("OVERRIDE_DEPRECATION")
                     override fun onCapturedContentResize(width: Int, height: Int) {
@@ -126,8 +131,8 @@ class ScreenCaptureHandler(private val activity: Activity) {
                 // backgroundHandler blocks on latch.await() 
                 // listenerHandler is free to dispatch ImageReader callbacks
                 val captureSyncLatch = CountDownLatch(1)
-                var captureResult: Map<String, Any>? = null
-                var captureError: String? = null
+                var internalCaptureResult: Map<String, Any>? = null
+                var internalCaptureError: String? = null
 
                 imageReader.setOnImageAvailableListener({ reader ->
                     try {
@@ -144,16 +149,16 @@ class ScreenCaptureHandler(private val activity: Activity) {
                                 map["height"] = height
                                 map["bytes"] = pngBytes
                                 Log.d(TAG, "captureScreen: SUCCESS width=$width height=$height bytes=${pngBytes.size}")
-                                captureResult = map
+                                internalCaptureResult = map
                             } catch (e: Exception) {
                                 Log.d(TAG, "captureScreen: imageToPngBytes exception: ${e.message}")
-                                captureError = e.message
+                                internalCaptureError = e.message
                             } finally {
                                 image.close()
                             }
                         } else {
                             Log.d(TAG, "captureScreen: acquireLatestImage -> NULL")
-                            captureError = "No image available from reader"
+                            internalCaptureError = "No image available from reader"
                         }
                     } finally {
                         captureSyncLatch.countDown()
@@ -171,42 +176,83 @@ class ScreenCaptureHandler(private val activity: Activity) {
 
                 if (virtualDisplay == null) {
                     Log.d(TAG, "captureScreen: virtual display is NULL")
-                    result.error("DISPLAY_FAILED", "Failed to create virtual display", null)
+                    errorCode = "DISPLAY_FAILED"
+                    errorMessage = "Failed to create virtual display"
                     return@post
                 }
 
                 val latchReached = captureSyncLatch.await(5, TimeUnit.SECONDS)
                 if (!latchReached) {
                     Log.d(TAG, "captureScreen: captureSyncLatch timed out after 5s")
-                    captureError = "Image acquisition timed out after 5 seconds"
+                    internalCaptureError = "Image acquisition timed out after 5 seconds"
                 }
 
+                captureResult = internalCaptureResult
                 if (captureResult != null) {
-                    result.success(captureResult)
+                    Log.d(TAG, "capture_success")
                 } else {
-                    result.error("CAPTURE_FAILED", captureError ?: "Unknown capture error", null)
+                    errorCode = "CAPTURE_FAILED"
+                    errorMessage = internalCaptureError ?: "Unknown capture error"
                 }
             } catch (e: SecurityException) {
                 Log.d(TAG, "captureScreen: SecurityException: ${e.message}")
-                result.error("SECURITY_EXCEPTION", e.message, null)
+                errorCode = "SECURITY_EXCEPTION"
+                errorMessage = e.message
             } catch (e: Exception) {
                 Log.d(TAG, "captureScreen: exception: ${e.message}")
-                result.error("CAPTURE_FAILED", e.message, null)
+                errorCode = "CAPTURE_FAILED"
+                errorMessage = e.message
             } finally {
-                projectionCallback?.let { cb ->
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        mediaProjection?.unregisterCallback(cb)
+                // Post result + cleanup to main thread (required by Flutter and Android framework APIs)
+                val finalCode = errorCode
+                val finalMessage = errorMessage
+                Handler(activity.mainLooper).post {
+                    try {
+                        if (captureResult != null) {
+                            result.success(captureResult)
+                        } else {
+                            result.error(finalCode ?: "UNKNOWN", finalMessage ?: "Unknown error", null)
+                        }
+                    } finally {
+                        Log.d(TAG, "projection_cleanup: start")
+                        try {
+                            projectionCallback?.let { cb ->
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                    mediaProjection?.unregisterCallback(cb)
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.d(TAG, "projection_cleanup: unregisterCallback exception: ${e.message}")
+                        }
+                        try {
+                            virtualDisplay?.release()
+                        } catch (e: Exception) {
+                            Log.d(TAG, "projection_cleanup: virtualDisplay.release exception: ${e.message}")
+                        }
+                        Log.d(TAG, "captureScreen: virtualDisplay released")
+                        try {
+                            imageReader?.close()
+                        } catch (e: Exception) {
+                            Log.d(TAG, "projection_cleanup: imageReader.close exception: ${e.message}")
+                        }
+                        Log.d(TAG, "captureScreen: imageReader closed")
+                        Log.d(TAG, "before_projection_stop")
+                        try {
+                            mediaProjection?.stop()
+                        } catch (e: Exception) {
+                            Log.d(TAG, "projection_cleanup: mediaProjection.stop exception: ${e.message}")
+                        }
+                        Log.d(TAG, "after_projection_stop")
+                        Log.d(TAG, "before_service_stop")
+                        try {
+                            activity.stopService(serviceIntent)
+                        } catch (e: Exception) {
+                            Log.d(TAG, "service_stop: exception: ${e.message}")
+                        }
+                        Log.d(TAG, "after_service_stop")
+                        Log.d(TAG, "captureScreen: cleanup complete")
                     }
                 }
-                virtualDisplay?.release()
-                Log.d(TAG, "captureScreen: virtualDisplay released")
-                imageReader?.close()
-                Log.d(TAG, "captureScreen: imageReader closed")
-                mediaProjection?.stop()
-                Log.d(TAG, "projection_stopped")
-                activity.stopService(serviceIntent)
-                Log.d(TAG, "captureScreen: foreground service stopped")
-                Log.d(TAG, "captureScreen: cleanup complete")
             }
         }
     }
