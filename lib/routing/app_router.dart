@@ -8,7 +8,7 @@ class AppRouter {
 
   AppRouter()
     : router = GoRouter(
-        initialLocation: RoutePaths.home,
+        initialLocation: RoutePaths.debug,
         routes: [
           GoRoute(
             path: RoutePaths.home,
