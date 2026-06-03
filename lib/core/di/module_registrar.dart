@@ -1,4 +1,5 @@
 import 'core_module.dart';
+import 'package:screenfix_ai/features/analysis/analysis_module.dart';
 import 'package:screenfix_ai/features/overlay/overlay_module.dart';
 import 'package:screenfix_ai/features/permissions/permissions_module.dart';
 import 'package:screenfix_ai/features/screen_capture/screen_capture_module.dart';
@@ -11,5 +12,6 @@ class ModuleRegistrar {
     await PermissionsModule.register();
     await OverlayModule.register();
     await ScreenCaptureModule.register();
+    await AnalysisModule.register();
   }
 }

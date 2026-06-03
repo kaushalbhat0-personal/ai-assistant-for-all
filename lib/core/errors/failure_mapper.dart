@@ -1,3 +1,5 @@
+import 'package:screenfix_ai/features/analysis/domain/vision_error.dart';
+
 import 'failures.dart';
 
 class FailureMapper {
@@ -5,6 +7,7 @@ class FailureMapper {
 
   static String toUserMessage(Failure failure) {
     return switch (failure) {
+      VisionError(:final message) => message,
       NetworkFailure() => 'No internet connection. Please check your network and try again.',
       TimeoutFailure() => 'The request timed out. Please try again.',
       ServerFailure(:final statusCode?) => 'Server error ($statusCode). Please try again later.',
@@ -15,11 +18,13 @@ class FailureMapper {
       QuotaExceededFailure() => 'You\'ve reached your monthly analysis limit.',
       CacheFailure() => 'Could not load cached data. Pull to refresh.',
       UnknownFailure() => 'Something unexpected happened. Please try again.',
+      _ => 'An unexpected error occurred. Please try again.',
     };
   }
 
   static String toTitle(Failure failure) {
     return switch (failure) {
+      VisionError(:final type) => type.displayName,
       NetworkFailure() => 'Network Error',
       TimeoutFailure() => 'Timeout',
       ServerFailure() => 'Server Error',
@@ -29,6 +34,7 @@ class FailureMapper {
       QuotaExceededFailure() => 'Quota Exceeded',
       CacheFailure() => 'Cache Error',
       UnknownFailure() => 'Error',
+      _ => 'Error',
     };
   }
 }

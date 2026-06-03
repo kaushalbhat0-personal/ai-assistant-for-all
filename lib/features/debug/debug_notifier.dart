@@ -22,6 +22,7 @@ class DebugState {
   final bool permissionAvailable;
   final bool sessionActive;
   final ScreenCaptureResult? lastCapture;
+  final Duration captureDuration;
   final bool isOverlayChecking;
   final bool isOverlayRequesting;
   final bool isCaptureChecking;
@@ -36,6 +37,7 @@ class DebugState {
     this.permissionAvailable = false,
     this.sessionActive = false,
     this.lastCapture,
+    this.captureDuration = Duration.zero,
     this.isOverlayChecking = false,
     this.isOverlayRequesting = false,
     this.isCaptureChecking = false,
@@ -51,6 +53,7 @@ class DebugState {
     bool? permissionAvailable,
     bool? sessionActive,
     ScreenCaptureResult? lastCapture,
+    Duration? captureDuration,
     bool? isOverlayChecking,
     bool? isOverlayRequesting,
     bool? isCaptureChecking,
@@ -66,6 +69,7 @@ class DebugState {
       permissionAvailable: permissionAvailable ?? this.permissionAvailable,
       sessionActive: sessionActive ?? this.sessionActive,
       lastCapture: lastCapture ?? this.lastCapture,
+      captureDuration: captureDuration ?? this.captureDuration,
       isOverlayChecking: isOverlayChecking ?? this.isOverlayChecking,
       isOverlayRequesting: isOverlayRequesting ?? this.isOverlayRequesting,
       isCaptureChecking: isCaptureChecking ?? this.isCaptureChecking,
@@ -224,16 +228,19 @@ class DebugNotifier extends StateNotifier<DebugState> {
 
   Future<void> captureScreen() async {
     state = state.copyWith(isCapturing: true);
+    final captureSw = Stopwatch()..start();
     try {
       final result = await _captureService.captureScreen();
+      captureSw.stop();
       if (result != null) {
         state = state.copyWith(
           lastCapture: result,
+          captureDuration: captureSw.elapsed,
           isCapturing: false,
         );
         _addLog(
           'Screen captured: ${result.width}x${result.height} '
-              '(${result.bytes.length} bytes)',
+              '(${result.bytes.length} bytes, ${captureSw.elapsed.inMilliseconds}ms)',
           'success',
         );
       } else {
@@ -241,6 +248,7 @@ class DebugNotifier extends StateNotifier<DebugState> {
         _addLog('Screen capture returned null', 'error');
       }
     } catch (e) {
+      captureSw.stop();
       state = state.copyWith(isCapturing: false);
       _addLog('Screen capture failed: $e', 'error');
     }

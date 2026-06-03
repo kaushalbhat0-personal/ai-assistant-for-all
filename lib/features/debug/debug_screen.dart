@@ -3,6 +3,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:screenfix_ai/core/config/app_config.dart';
+import 'package:screenfix_ai/features/analysis/domain/analysis_metrics.dart';
+import 'package:screenfix_ai/features/analysis/integration/vision_health_check.dart';
+import 'package:screenfix_ai/features/analysis/presentation/guidance_provider.dart';
 import 'package:screenfix_ai/features/debug/debug_notifier.dart';
 import 'package:screenfix_ai/features/screen_capture/domain/screen_capture_result.dart';
 
@@ -11,8 +15,10 @@ class DebugScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(debugProvider);
-    final notifier = ref.read(debugProvider.notifier);
+    final debugState = ref.watch(debugProvider);
+    final debugNotifier = ref.read(debugProvider.notifier);
+    final guidanceState = ref.watch(guidanceControllerProvider);
+    final guidanceNotifier = ref.read(guidanceControllerProvider.notifier);
 
     return Scaffold(
       appBar: AppBar(
@@ -21,8 +27,8 @@ class DebugScreen extends ConsumerWidget {
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: () {
-              unawaited(notifier.checkOverlayPermission());
-              unawaited(notifier.checkCapturePermission());
+              unawaited(debugNotifier.checkOverlayPermission());
+              unawaited(debugNotifier.checkCapturePermission());
             },
           ),
         ],
@@ -37,8 +43,8 @@ class DebugScreen extends ConsumerWidget {
               children: [
                 _StatusRow(
                   label: 'Status',
-                  value: state.overlayPermissionGranted ? 'Granted' : 'Denied',
-                  isSuccess: state.overlayPermissionGranted,
+                  value: debugState.overlayPermissionGranted ? 'Granted' : 'Denied',
+                  isSuccess: debugState.overlayPermissionGranted,
                 ),
                 const SizedBox(height: 8),
                 Row(
@@ -46,16 +52,16 @@ class DebugScreen extends ConsumerWidget {
                     Expanded(
                       child: _ActionButton(
                         label: 'Check Permission',
-                        isLoading: state.isOverlayChecking,
-                        onPressed: () => unawaited(notifier.checkOverlayPermission()),
+                        isLoading: debugState.isOverlayChecking,
+                        onPressed: () => unawaited(debugNotifier.checkOverlayPermission()),
                       ),
                     ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: _ActionButton(
                         label: 'Request Permission',
-                        isLoading: state.isOverlayRequesting,
-                        onPressed: () => unawaited(notifier.requestOverlayPermission()),
+                        isLoading: debugState.isOverlayRequesting,
+                        onPressed: () => unawaited(debugNotifier.requestOverlayPermission()),
                       ),
                     ),
                   ],
@@ -68,10 +74,10 @@ class DebugScreen extends ConsumerWidget {
               children: [
                 _StatusRow(
                   label: 'Token',
-                  value: state.permissionAvailable
+                  value: debugState.permissionAvailable
                       ? 'Available'
                       : 'Not Available',
-                  isSuccess: state.permissionAvailable,
+                  isSuccess: debugState.permissionAvailable,
                 ),
                 const SizedBox(height: 8),
                 Row(
@@ -79,18 +85,18 @@ class DebugScreen extends ConsumerWidget {
                     Expanded(
                       child: _ActionButton(
                         label: 'Check Token',
-                        isLoading: state.isCaptureChecking,
-                        onPressed: () => unawaited(notifier.checkCapturePermission()),
+                        isLoading: debugState.isCaptureChecking,
+                        onPressed: () => unawaited(debugNotifier.checkCapturePermission()),
                       ),
                     ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: _ActionButton(
                         label: 'Request Permission',
-                        isLoading: state.isCaptureRequesting,
-                        onPressed: state.sessionActive
+                        isLoading: debugState.isCaptureRequesting,
+                        onPressed: debugState.sessionActive
                             ? null
-                            : () => unawaited(notifier.requestCapturePermission()),
+                            : () => unawaited(debugNotifier.requestCapturePermission()),
                       ),
                     ),
                   ],
@@ -103,26 +109,26 @@ class DebugScreen extends ConsumerWidget {
               children: [
                 _StatusRow(
                   label: 'Status',
-                  value: state.sessionActive ? 'Active' : 'Inactive',
-                  isSuccess: state.sessionActive,
+                  value: debugState.sessionActive ? 'Active' : 'Inactive',
+                  isSuccess: debugState.sessionActive,
                 ),
                 const SizedBox(height: 8),
                 Row(
                   children: [
-                    if (state.sessionActive)
+                    if (debugState.sessionActive)
                       Expanded(
                         child: _ActionButton(
                           label: 'Stop Session',
-                          isLoading: state.isSessionStopping,
-                          onPressed: () => unawaited(notifier.stopSession()),
+                          isLoading: debugState.isSessionStopping,
+                          onPressed: () => unawaited(debugNotifier.stopSession()),
                         ),
                       ),
-                    if (!state.sessionActive && state.permissionAvailable)
+                    if (!debugState.sessionActive && debugState.permissionAvailable)
                       Expanded(
                         child: _ActionButton(
                           label: 'Start Session',
-                          isLoading: state.isSessionStarting,
-                          onPressed: () => unawaited(notifier.startSession()),
+                          isLoading: debugState.isSessionStarting,
+                          onPressed: () => unawaited(debugNotifier.startSession()),
                         ),
                       ),
                   ],
@@ -133,26 +139,109 @@ class DebugScreen extends ConsumerWidget {
             _SectionCard(
               title: 'Capture',
               children: [
-                _ActionButton(
-                  label: 'Capture Screen',
-                  isLoading: state.isCapturing,
-                  onPressed: state.sessionActive
-                      ? () => unawaited(notifier.captureScreen())
-                      : null,
+                Row(
+                  children: [
+                    Expanded(
+                      child: _ActionButton(
+                        label: 'Capture Screen',
+                        isLoading: debugState.isCapturing,
+                        onPressed: debugState.sessionActive
+                            ? () => unawaited(debugNotifier.captureScreen())
+                            : null,
+                      ),
+                    ),
+                    if (debugState.lastCapture != null) ...[
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _ActionButton(
+                          label: 'Analyze',
+                          isLoading: guidanceState.isProcessing,
+                          onPressed: guidanceState.isProcessing
+                              ? null
+                              : () => unawaited(guidanceNotifier.captureNow(
+                                    debugState.lastCapture!,
+                                    captureTime: debugState.captureDuration,
+                                  )),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
-                if (state.lastCapture != null) ...[
+                if (debugState.lastCapture != null) ...[
                   const SizedBox(height: 12),
-                  _CapturePreview(result: state.lastCapture!),
+                  _CapturePreview(result: debugState.lastCapture!),
                 ],
               ],
             ),
+            const SizedBox(height: 16),
+            _SectionCard(
+              title: 'Vision Diagnostics',
+              children: [
+                _InfoRow(label: 'Provider', value: VisionProvider.defaultProvider.displayName),
+                _KeyStatusRow(hasKey: AppConfig.hasValidApiKey),
+                _HealthStatusRow(metrics: guidanceState.metrics),
+              ],
+            ),
+            if (guidanceState.metrics != null) ...[
+              const SizedBox(height: 16),
+              _SectionCard(
+                title: 'Analysis Metrics',
+                children: [
+                  _MetricRow(label: 'Capture', duration: guidanceState.metrics!.captureTime),
+                  _MetricRow(label: 'Process', duration: guidanceState.metrics!.processTime),
+                  _MetricRow(label: 'API', duration: guidanceState.metrics!.apiTime),
+                  _MetricRow(label: 'Total', duration: guidanceState.metrics!.totalTime),
+                  if (guidanceState.metrics!.jpegSizeBytes > 0) ...[
+                    const SizedBox(height: 8),
+                    _ByteRow(label: 'JPEG Size', bytes: guidanceState.metrics!.jpegSizeBytes),
+                    _ByteRow(label: 'Original PNG', bytes: guidanceState.metrics!.originalPngSizeBytes),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      child: Row(
+                        children: [
+                          const SizedBox(width: 80, child: Text('Compression:', style: TextStyle(fontWeight: FontWeight.w500))),
+                          Text('${guidanceState.metrics!.compressionRatio.toStringAsFixed(1)}x'),
+                        ],
+                      ),
+                    ),
+                  ],
+                  const Divider(),
+                  _InfoRow(label: 'Model', value: guidanceState.metrics!.modelUsed),
+                  _InfoRow(
+                    label: 'Status',
+                    value: guidanceState.metrics!.isSuccess ? 'Success' : 'Failed',
+                    color: guidanceState.metrics!.isSuccess ? Colors.green : Colors.red,
+                  ),
+                  if (guidanceState.metrics!.promptTokens > 0)
+                    _InfoRow(label: 'Prompt Tokens', value: '${guidanceState.metrics!.promptTokens}'),
+                  if (guidanceState.metrics!.completionTokens > 0)
+                    _InfoRow(label: 'Completion Tokens', value: '${guidanceState.metrics!.completionTokens}'),
+                ],
+              ),
+            ],
+            if (guidanceState.current != null) ...[
+              const SizedBox(height: 16),
+              _SectionCard(
+                title: 'Last Guidance',
+                children: [
+                  _InfoRow(label: 'Intent', value: guidanceState.current!.screenIntent.displayName),
+                  _InfoRow(label: 'Summary', value: guidanceState.current!.summary),
+                  ...guidanceState.current!.recommendations.map(
+                    (r) => Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text('• ${r.title}: ${r.description}', style: const TextStyle(fontSize: 13)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: 16),
             _SectionCard(
               title: 'Logs',
               children: [
                 SizedBox(
                   height: 300,
-                  child: state.logs.isEmpty
+                  child: debugState.logs.isEmpty
                       ? const Center(
                           child: Text(
                             'No logs yet',
@@ -160,9 +249,9 @@ class DebugScreen extends ConsumerWidget {
                           ),
                         )
                       : ListView.builder(
-                          itemCount: state.logs.length,
+                          itemCount: debugState.logs.length,
                           itemBuilder: (_, index) {
-                            final entry = state.logs[index];
+                            final entry = debugState.logs[index];
                             final icon = switch (entry.type) {
                               'success' => Icons.check_circle,
                               'error' => Icons.error,
@@ -203,7 +292,7 @@ class DebugScreen extends ConsumerWidget {
                 Align(
                   alignment: Alignment.centerRight,
                   child: TextButton.icon(
-                    onPressed: notifier.clearLogs,
+                    onPressed: debugNotifier.clearLogs,
                     icon: const Icon(Icons.delete, size: 18),
                     label: const Text('Clear Logs'),
                   ),
@@ -336,6 +425,163 @@ class _CapturePreview extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _MetricRow extends StatelessWidget {
+  final String label;
+  final Duration duration;
+
+  const _MetricRow({required this.label, required this.duration});
+
+  @override
+  Widget build(BuildContext context) {
+    final ms = duration.inMilliseconds;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 80,
+            child: Text('$label:', style: const TextStyle(fontWeight: FontWeight.w500)),
+          ),
+          Text('$ms ms'),
+        ],
+      ),
+    );
+  }
+}
+
+class _InfoRow extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color? color;
+
+  const _InfoRow({required this.label, required this.value, this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 130,
+            child: Text('$label:', style: const TextStyle(fontWeight: FontWeight.w500)),
+          ),
+          Expanded(
+            child: Text(value, style: color != null ? TextStyle(color: color) : null),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _formatBytes(int bytes) {
+  if (bytes >= 1024 * 1024) {
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+  if (bytes >= 1024) {
+    return '${(bytes / 1024).toStringAsFixed(0)} KB';
+  }
+  return '$bytes B';
+}
+
+class _ByteRow extends StatelessWidget {
+  final String label;
+  final int bytes;
+
+  const _ByteRow({required this.label, required this.bytes});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 130,
+            child: Text('$label:', style: const TextStyle(fontWeight: FontWeight.w500)),
+          ),
+          Text(_formatBytes(bytes)),
+        ],
+      ),
+    );
+  }
+}
+
+class _KeyStatusRow extends StatelessWidget {
+  final bool hasKey;
+
+  const _KeyStatusRow({required this.hasKey});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 130,
+            child: Text('API Key:', style: TextStyle(fontWeight: FontWeight.w500)),
+          ),
+          Icon(
+            hasKey ? Icons.check_circle : Icons.cancel,
+            size: 18,
+            color: hasKey ? Colors.green : Colors.red,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            hasKey ? 'Present' : 'Missing',
+            style: TextStyle(
+              color: hasKey ? Colors.green : Colors.red,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HealthStatusRow extends StatelessWidget {
+  final AnalysisMetrics? metrics;
+
+  const _HealthStatusRow({this.metrics});
+
+  @override
+  Widget build(BuildContext context) {
+    final health = VisionHealthCheck.run();
+    final isHealthy = health == VisionHealthStatus.healthy;
+    final label = health == VisionHealthStatus.healthy ? 'Healthy' : 'Misconfigured';
+    final statusLabel = metrics?.isSuccess == true ? 'Connected' : label;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 130,
+            child: Text('Health:', style: TextStyle(fontWeight: FontWeight.w500)),
+          ),
+          Icon(
+            isHealthy ? Icons.check_circle : Icons.warning,
+            size: 18,
+            color: isHealthy ? Colors.green : Colors.orange,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            statusLabel,
+            style: TextStyle(
+              color: isHealthy ? Colors.green : Colors.orange,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

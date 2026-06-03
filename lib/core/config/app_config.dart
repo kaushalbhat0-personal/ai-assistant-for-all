@@ -1,5 +1,30 @@
 import 'environment.dart';
 
+enum VisionProvider {
+  openRouterPaid,
+  openRouterFree;
+
+  static VisionProvider get defaultProvider {
+    const fromEnv = String.fromEnvironment(
+      'VISION_PROVIDER',
+      defaultValue: 'openRouterPaid',
+    );
+    return switch (fromEnv) {
+      'openRouterFree' => VisionProvider.openRouterFree,
+      _ => VisionProvider.openRouterPaid,
+    };
+  }
+
+  bool get requiresApiKey => true;
+
+  String get displayName {
+    return switch (this) {
+      VisionProvider.openRouterPaid => 'OpenRouter Paid',
+      VisionProvider.openRouterFree => 'OpenRouter Free',
+    };
+  }
+}
+
 class AppConfig {
   AppConfig._();
 
@@ -12,6 +37,9 @@ class AppConfig {
     'OPENROUTER_API_KEY',
     defaultValue: '',
   );
+
+  static bool get hasValidApiKey =>
+      openRouterApiKey.isNotEmpty && openRouterApiKey.startsWith('sk-or-');
 
   static String get telemetryEndpoint {
     const fromEnv = String.fromEnvironment(
@@ -39,14 +67,32 @@ class AppConfig {
     };
   }
 
-  static const Duration requestTimeout = Duration(seconds: 30);
-  static const int maxRetries = 3;
+  static String get visionApiEndpoint {
+    const fromEnv = String.fromEnvironment(
+      'VISION_API_ENDPOINT',
+      defaultValue: '',
+    );
+    if (fromEnv.isNotEmpty) return fromEnv;
+    return 'https://openrouter.ai/api/v1/chat/completions';
+  }
+
+  static String get visionModelsEndpoint {
+    const fromEnv = String.fromEnvironment(
+      'VISION_MODELS_ENDPOINT',
+      defaultValue: '',
+    );
+    if (fromEnv.isNotEmpty) return fromEnv;
+    return 'https://openrouter.ai/api/v1/models';
+  }
+
+  static const Duration requestTimeout = Duration(seconds: 60);
+  static const int maxRetries = 2;
 
   static void validate() {
     assert(
       environment == Environment.development || openRouterApiKey.isNotEmpty,
       'OPENROUTER_API_KEY is required in $environment mode. '
-      'Pass it via --dart-define=OPENROUTER_API_KEY=sk-...',
+      'Pass it via --dart-define=OPENROUTER_API_KEY=sk-or-...',
     );
   }
 }

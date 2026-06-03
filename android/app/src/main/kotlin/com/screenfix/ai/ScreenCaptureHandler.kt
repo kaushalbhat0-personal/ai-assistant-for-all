@@ -31,6 +31,7 @@ class ScreenCaptureHandler(private val activity: Activity) {
     private var projectionCallback: MediaProjection.Callback? = null
     private var serviceIntent: Intent? = null
     private var currentVirtualDisplay: android.hardware.display.VirtualDisplay? = null
+    private var previousImageReader: ImageReader? = null
     private var sessionActive = false
 
     fun register(flutterEngine: FlutterEngine) {
@@ -132,10 +133,16 @@ class ScreenCaptureHandler(private val activity: Activity) {
                 imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
 
                 imageReader.setOnImageAvailableListener({ reader ->
+                    Log.d(TAG, "capture_on_image_available")
                     try {
                         val image = reader.acquireLatestImage()
                         if (image != null) {
                             try {
+                                val plane = image.planes[0]
+                                Log.d(TAG, "width=$width height=$height " +
+                                    "pixelStride=${plane.pixelStride} " +
+                                    "rowStride=${plane.rowStride} " +
+                                    "buffer.remaining=${plane.buffer.remaining()}")
                                 val pngBytes = imageToPngBytes(image, width, height)
                                 val map = HashMap<String, Any>()
                                 map["width"] = width
@@ -151,9 +158,6 @@ class ScreenCaptureHandler(private val activity: Activity) {
                             errorMsg = "No image available from reader"
                         }
                     } finally {
-                        try {
-                            reader.close()
-                        } catch (_: Exception) {}
                         captureSyncLatch.countDown()
                     }
                 }, listenerHandler)
@@ -161,7 +165,19 @@ class ScreenCaptureHandler(private val activity: Activity) {
                 if (currentVirtualDisplay == null) {
                     errorMsg = "VirtualDisplay not created at session start"
                 } else {
+                    // Disarm previous reader so any lingering callbacks are no-ops
+                    previousImageReader?.setOnImageAvailableListener(null, null)
+
+                    Log.d(TAG, "capture_before_set_surface")
                     currentVirtualDisplay!!.setSurface(imageReader.surface)
+                    Log.d(TAG, "capture_after_set_surface")
+
+                    // Close previous reader — its surface was detached by setSurface above
+                    try {
+                        previousImageReader?.close()
+                    } catch (_: Exception) {}
+                    previousImageReader = null
+
                     val latchReached = captureSyncLatch.await(5, TimeUnit.SECONDS)
                     if (!latchReached) {
                         errorMsg = "Image acquisition timed out after 5 seconds"
@@ -177,6 +193,13 @@ class ScreenCaptureHandler(private val activity: Activity) {
                         it.error("CAPTURE_FAILED", finalError ?: "Unknown error", null)
                     }
                 }
+
+                // Disarm this reader to stop continuous onImageAvailable from screen updates
+                imageReader?.setOnImageAvailableListener(null, null)
+
+                // Keep reader alive with surface attached for next capture
+                previousImageReader = imageReader
+                imageReader = null
             } catch (e: SecurityException) {
                 val msg = e.message ?: ""
                 Log.e(TAG, "captureScreen: SecurityException: $msg")
@@ -207,6 +230,10 @@ class ScreenCaptureHandler(private val activity: Activity) {
             } catch (_: Exception) {}
             currentVirtualDisplay = null
             try {
+                previousImageReader?.close()
+            } catch (_: Exception) {}
+            previousImageReader = null
+            try {
                 projectionCallback?.let { cb ->
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         mediaProjection?.unregisterCallback(cb)
@@ -234,10 +261,34 @@ class ScreenCaptureHandler(private val activity: Activity) {
     }
 
     private fun imageToPngBytes(image: android.media.Image, width: Int, height: Int): ByteArray {
-        val buffer = image.planes[0].buffer
+        val plane = image.planes[0]
+        val buffer = plane.buffer
+        val pixelStride = plane.pixelStride
+        val rowStride = plane.rowStride
+        val rowPadding = rowStride - pixelStride * width
+
         buffer.rewind()
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        bitmap.copyPixelsFromBuffer(buffer)
+
+        if (rowPadding == 0) {
+            bitmap.copyPixelsFromBuffer(buffer)
+        } else {
+            val allPixels = IntArray(width * height)
+            for (y in 0 until height) {
+                val rowBase = y * rowStride
+                val pixelBase = y * width
+                for (col in 0 until width) {
+                    val offset = rowBase + col * pixelStride
+                    val r = buffer.get(offset).toInt() and 0xFF
+                    val g = buffer.get(offset + 1).toInt() and 0xFF
+                    val b = buffer.get(offset + 2).toInt() and 0xFF
+                    val a = buffer.get(offset + 3).toInt() and 0xFF
+                    allPixels[pixelBase + col] = (a shl 24) or (r shl 16) or (g shl 8) or b
+                }
+            }
+            bitmap.setPixels(allPixels, 0, width, 0, 0, width, height)
+        }
+
         val stream = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
         bitmap.recycle()
@@ -247,9 +298,11 @@ class ScreenCaptureHandler(private val activity: Activity) {
     fun dispose() {
         if (sessionActive) {
             try { currentVirtualDisplay?.release() } catch (_: Exception) {}
+            try { previousImageReader?.close() } catch (_: Exception) {}
             try { mediaProjection?.stop() } catch (_: Exception) {}
             try { serviceIntent?.let { activity.stopService(it) } } catch (_: Exception) {}
         }
+        previousImageReader = null
         listenerThread.quitSafely()
         backgroundThread.quitSafely()
     }
